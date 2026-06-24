@@ -1,0 +1,75 @@
+spring:
+  application:
+    name: ledger-service
+
+  r2dbc:
+    url: r2dbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:nexledger}
+    username: ${DB_USER:nexledger}
+    password: ${DB_PASS:nexledger}
+    pool:
+      initial-size: 10
+      max-size: 50
+      max-idle-time: 30m
+
+  flyway:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:nexledger}
+    user: ${DB_USER:nexledger}
+    password: ${DB_PASS:nexledger}
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      timeout: 2000ms
+      lettuce:
+        pool:
+          max-active: 50
+          max-idle: 25
+          min-idle: 5
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BROKERS:localhost:9092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      acks: all
+      retries: 3
+      properties:
+        enable.idempotence: true
+        max.in.flight.requests.per.connection: 1
+    consumer:
+      group-id: ledger-read-side
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      auto-offset-reset: earliest
+      enable-auto-commit: false
+
+server:
+  port: ${SERVER_PORT:8080}
+  netty:
+    connection-timeout: 5s
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+
+nexledger:
+  fraud:
+    service-url: ${FRAUD_SERVICE_URL:http://localhost:8090}
+    timeout-ms: 500
+    score-threshold: 0.75
+  idempotency:
+    ttl-seconds: 86400
+  kafka:
+    topics:
+      account-events: account-events
+      transaction-events: transaction-events
+      saga-events: saga-events
