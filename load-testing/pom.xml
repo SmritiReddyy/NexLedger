@@ -10,7 +10,9 @@
     <name>NexLedger Load Testing</name>
 
     <properties>
-        <java.version>21</java.version>
+        <maven.compiler.source>21</maven.compiler.source>
+        <maven.compiler.target>21</maven.compiler.target>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <scala.version>2.13.13</scala.version>
         <gatling.version>3.10.5</gatling.version>
         <gatling-maven-plugin.version>4.9.6</gatling-maven-plugin.version>
@@ -42,6 +44,8 @@
                 <version>4.8.1</version>
                 <executions>
                     <execution>
+                        <id>scala-test-compile</id>
+                        <phase>test-compile</phase>
                         <goals>
                             <goal>testCompile</goal>
                         </goals>
@@ -49,5 +53,34 @@
                 </executions>
             </plugin>
         </plugins>
+        <pluginManagement>
+            <plugins>
+                <!-- Suppress M2E lifecycle mapping warning for scala-maven-plugin -->
+                <plugin>
+                    <groupId>org.eclipse.m2e</groupId>
+                    <artifactId>lifecycle-mapping</artifactId>
+                    <version>1.0.0</version>
+                    <configuration>
+                        <lifecycleMappingMetadata>
+                            <pluginExecutions>
+                                <pluginExecution>
+                                    <pluginExecutionFilter>
+                                        <groupId>net.alchim31.maven</groupId>
+                                        <artifactId>scala-maven-plugin</artifactId>
+                                        <versionRange>[0,)</versionRange>
+                                        <goals>
+                                            <goal>testCompile</goal>
+                                        </goals>
+                                    </pluginExecutionFilter>
+                                    <action>
+                                        <ignore/>
+                                    </action>
+                                </pluginExecution>
+                            </pluginExecutions>
+                        </lifecycleMappingMetadata>
+                    </configuration>
+                </plugin>
+            </plugins>
+        </pluginManagement>
     </build>
 </project>

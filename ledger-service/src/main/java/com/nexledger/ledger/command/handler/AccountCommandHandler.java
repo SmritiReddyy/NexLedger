@@ -8,7 +8,6 @@ import com.nexledger.ledger.command.model.DebitAccountCommand;
 import com.nexledger.ledger.event.store.EventStore;
 import com.nexledger.ledger.fraud.FraudClient;
 import com.nexledger.ledger.idempotency.IdempotencyService;
-import com.nexledger.ledger.query.projection.AccountProjection;
 import com.nexledger.ledger.query.projection.AccountProjectionRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
