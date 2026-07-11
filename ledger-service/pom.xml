@@ -20,6 +20,7 @@
     <properties>
         <java.version>21</java.version>
         <r2dbc-postgresql.version>1.0.4.RELEASE</r2dbc-postgresql.version>
+        <flyway.version>10.11.0</flyway.version>
     </properties>
 
     <dependencies>
