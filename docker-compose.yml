@@ -9,7 +9,7 @@ services:
       POSTGRES_USER: nexledger
       POSTGRES_PASSWORD: nexledger
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
@@ -26,7 +26,7 @@ services:
     container_name: nexledger-redis
     command: redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru
     ports:
-      - "6379:6379"
+      - "6380:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -100,7 +100,7 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8090/health"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8090/health')"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -135,7 +135,7 @@ services:
       fraud-service:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/actuator/health"]
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/actuator/health"]
       interval: 15s
       timeout: 5s
       retries: 10
