@@ -1,7 +1,9 @@
 package com.nexledger.ledger.event.store;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nexledger.ledger.event.publisher.EventPublisher;
+import io.r2dbc.postgresql.codec.Json;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -18,11 +20,18 @@ public class EventStore {
 
     private final EventRepository eventRepository;
     private final EventPublisher eventPublisher;
+    private final ObjectMapper objectMapper;
 
     @Transactional
     public Mono<DomainEvent> appendEvent(UUID aggregateId, String aggregateType,
                                           String eventType, JsonNode payload,
                                           long expectedVersion) {
+        String payloadJson;
+        try {
+            payloadJson = objectMapper.writeValueAsString(payload);
+        } catch (Exception e) {
+            return Mono.error(e);
+        }
         return eventRepository.findMaxVersionByAggregateId(aggregateId)
             .defaultIfEmpty(-1L)
             .flatMap(currentVersion -> {
@@ -32,7 +41,7 @@ public class EventStore {
                         ": expected version " + expectedVersion + " but found " + currentVersion));
                 }
                 DomainEvent event = DomainEvent.of(aggregateId, aggregateType,
-                    eventType, payload, expectedVersion + 1);
+                    eventType, Json.of(payloadJson), expectedVersion + 1);
                 return eventRepository.save(event);
             })
             .doOnSuccess(event -> eventPublisher.publish(event).subscribe())

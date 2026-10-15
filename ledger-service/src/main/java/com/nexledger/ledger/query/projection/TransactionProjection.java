@@ -1,6 +1,8 @@
 package com.nexledger.ledger.query.projection;
 
 import org.springframework.data.annotation.Id;
+import org.springframework.data.annotation.Transient;
+import org.springframework.data.domain.Persistable;
 import org.springframework.data.relational.core.mapping.Table;
 
 import java.math.BigDecimal;
@@ -8,9 +10,11 @@ import java.time.Instant;
 import java.util.UUID;
 
 @Table("transaction_projections")
-public class TransactionProjection {
+public class TransactionProjection implements Persistable<UUID> {
     @Id
     private UUID transactionId;
+    @Transient
+    private boolean isNew = false;
     private UUID accountId;
     private String type;
     private BigDecimal amount;
@@ -36,7 +40,11 @@ public class TransactionProjection {
         this.idempotencyKey = idempotencyKey;
         this.fraudScore = fraudScore;
         this.createdAt = Instant.now();
+        this.isNew = true;
     }
+
+    @Override public UUID getId() { return transactionId; }
+    @Override public boolean isNew() { return isNew; }
 
     public UUID getTransactionId() { return transactionId; }
     public UUID getAccountId() { return accountId; }

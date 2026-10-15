@@ -42,7 +42,7 @@ class AccountCommandHandlerTest {
 
     @BeforeEach
     void setUp() {
-        EventStore eventStore = new EventStore(eventRepository, eventPublisher);
+        EventStore eventStore = new EventStore(eventRepository, eventPublisher, objectMapper);
         handler = new AccountCommandHandler(eventStore, idempotencyService, fraudClient,
             accountProjectionRepository, objectMapper);
     }

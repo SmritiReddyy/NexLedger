@@ -38,7 +38,7 @@ public class EventPublisher {
                 "aggregateId", event.aggregateId().toString(),
                 "aggregateType", event.aggregateType(),
                 "eventType", event.eventType(),
-                "payload", event.payload(),
+                "payload", objectMapper.readTree(event.payload().asString()),
                 "version", event.version(),
                 "createdAt", event.createdAt().toString(),
                 "correlationId", event.correlationId() != null ? event.correlationId().toString() : ""
