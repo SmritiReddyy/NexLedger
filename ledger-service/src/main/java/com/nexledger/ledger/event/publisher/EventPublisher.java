@@ -11,7 +11,9 @@ import reactor.core.publisher.Mono;
 import reactor.kafka.sender.KafkaSender;
 import reactor.kafka.sender.SenderRecord;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.UUID;
 
 @Slf4j
 @Component
@@ -30,33 +32,35 @@ public class EventPublisher {
     @Value("${nexledger.kafka.topics.saga-events}")
     private String sagaEventsTopic;
 
-    public Mono<Void> publish(DomainEvent event) {
-        String topic = resolveTopic(event.eventType());
+    /** The JSON envelope consumers receive: event metadata plus its payload. */
+    public String envelope(DomainEvent event) {
         try {
-            String payload = objectMapper.writeValueAsString(Map.of(
-                "eventId", event.id() != null ? event.id() : 0,
-                "aggregateId", event.aggregateId().toString(),
-                "aggregateType", event.aggregateType(),
-                "eventType", event.eventType(),
-                "payload", objectMapper.readTree(event.payload().asString()),
-                "version", event.version(),
-                "createdAt", event.createdAt().toString(),
-                "correlationId", event.correlationId() != null ? event.correlationId().toString() : ""
-            ));
-            ProducerRecord<String, String> record =
-                new ProducerRecord<>(topic, event.aggregateId().toString(), payload);
-            SenderRecord<String, String, String> senderRecord =
-                SenderRecord.create(record, event.aggregateId().toString());
-            return kafkaSender.send(Mono.just(senderRecord))
-                .doOnNext(r -> log.debug("Published event {} to topic {}", event.eventType(), topic))
-                .doOnError(e -> log.error("Failed to publish event {}: {}", event.eventType(), e.getMessage()))
-                .then();
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("eventId", event.id() != null ? event.id() : 0);
+            m.put("aggregateId", event.aggregateId().toString());
+            m.put("aggregateType", event.aggregateType());
+            m.put("eventType", event.eventType());
+            m.put("payload", objectMapper.readTree(event.payload().asString()));
+            m.put("version", event.version());
+            m.put("createdAt", event.createdAt().toString());
+            m.put("correlationId", event.correlationId() != null ? event.correlationId().toString() : "");
+            return objectMapper.writeValueAsString(m);
         } catch (Exception e) {
-            return Mono.error(e);
+            throw new IllegalStateException("Could not serialise event " + event.id(), e);
         }
     }
 
-    private String resolveTopic(String eventType) {
+    /** Publish an already-built envelope; keyed by aggregate so one account's events stay in order. */
+    public Mono<Void> send(String topic, UUID aggregateId, String envelopeJson) {
+        ProducerRecord<String, String> record = new ProducerRecord<>(topic, aggregateId.toString(), envelopeJson);
+        return kafkaSender.send(Mono.just(SenderRecord.create(record, aggregateId.toString())))
+            .next()
+            .flatMap(result -> result.exception() == null ? Mono.empty() : Mono.<Void>error(result.exception()))
+            .doOnError(e -> log.error("Failed to publish to {}: {}", topic, e.getMessage()))
+            .then();
+    }
+
+    public String resolveTopic(String eventType) {
         if (eventType.startsWith("Account")) return accountEventsTopic;
         if (eventType.startsWith("Transfer") || eventType.startsWith("Saga")) return sagaEventsTopic;
         return transactionEventsTopic;

@@ -3,9 +3,7 @@ package com.nexledger.ledger.query.handler;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nexledger.ledger.query.cache.AccountCacheService;
-import com.nexledger.ledger.query.projection.AccountProjection;
 import com.nexledger.ledger.query.projection.AccountProjectionRepository;
-import com.nexledger.ledger.query.projection.TransactionProjection;
 import com.nexledger.ledger.query.projection.TransactionProjectionRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -14,13 +12,25 @@ import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Mono;
 
+import java.io.IOException;
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.util.UUID;
 
+/**
+ * Builds the read models from the event stream.
+ *
+ * Each record is projected to completion before the listener returns, so the
+ * container only commits the offset of an event whose projection is saved. A
+ * failure is rethrown and the record is redelivered. Every write is idempotent
+ * on event version, so redelivery and full replays leave the read model unchanged.
+ */
 @Slf4j
 @Component
 @RequiredArgsConstructor
 public class EventProjectionConsumer {
+
+    private static final Duration PROJECTION_TIMEOUT = Duration.ofSeconds(10);
 
     private final AccountProjectionRepository accountRepo;
     private final TransactionProjectionRepository transactionRepo;
@@ -28,87 +38,48 @@ public class EventProjectionConsumer {
     private final ObjectMapper objectMapper;
 
     @KafkaListener(topics = "${nexledger.kafka.topics.account-events}", groupId = "${spring.kafka.consumer.group-id}")
-    public void consumeAccountEvent(ConsumerRecord<String, String> record) {
-        try {
-            JsonNode envelope = objectMapper.readTree(record.value());
-            String eventType = envelope.get("eventType").asText();
-            JsonNode payload = envelope.get("payload");
-            log.debug("Projecting event: {}", eventType);
-            projectEvent(eventType, payload).subscribe(
-                v -> {},
-                e -> log.error("Projection failed for event {}: {}", eventType, e.getMessage())
-            );
-        } catch (Exception e) {
-            log.error("Failed to deserialize event: {}", e.getMessage());
-        }
+    public void consumeAccountEvent(ConsumerRecord<String, String> record) throws IOException {
+        JsonNode envelope = objectMapper.readTree(record.value());
+        String eventType = envelope.get("eventType").asText();
+        long version = envelope.get("version").asLong();
+        log.debug("Projecting {} v{}", eventType, version);
+        project(eventType, envelope.get("payload"), version).block(PROJECTION_TIMEOUT);
     }
 
     @KafkaListener(topics = "${nexledger.kafka.topics.transaction-events}", groupId = "${spring.kafka.consumer.group-id}")
-    public void consumeTransactionEvent(ConsumerRecord<String, String> record) {
+    public void consumeTransactionEvent(ConsumerRecord<String, String> record) throws IOException {
         consumeAccountEvent(record);
     }
 
-    private Mono<Void> projectEvent(String eventType, JsonNode payload) {
+    Mono<Void> project(String eventType, JsonNode payload, long version) {
         return switch (eventType) {
-            case "AccountCreated" -> projectAccountCreated(payload);
-            case "AccountDebited" -> projectAccountDebited(payload);
-            case "AccountCredited" -> projectAccountCredited(payload);
+            case "AccountCreated" -> projectAccountCreated(payload, version);
+            case "AccountDebited" -> projectMovement(payload, version, "DEBIT");
+            case "AccountCredited" -> projectMovement(payload, version, "CREDIT");
             default -> Mono.empty();
         };
     }
 
-    private Mono<Void> projectAccountCreated(JsonNode payload) {
+    private Mono<Void> projectAccountCreated(JsonNode payload, long version) {
         UUID accountId = UUID.fromString(payload.get("accountId").asText());
-        AccountProjection projection = new AccountProjection(
-            accountId,
-            payload.get("ownerId").asText(),
-            payload.get("currency").asText(),
-            new BigDecimal(payload.get("initialBalance").asText()),
-            "ACTIVE",
-            1L
-        );
-        return accountRepo.save(projection)
-            .flatMap(saved -> cacheService.evict(accountId))
-            .then();
+        return accountRepo.insertIfAbsent(accountId, payload.get("ownerId").asText(), payload.get("currency").asText(),
+                new BigDecimal(payload.get("initialBalance").asText()), version)
+            .then(cacheService.evict(accountId));
     }
 
-    private Mono<Void> projectAccountDebited(JsonNode payload) {
+    private Mono<Void> projectMovement(JsonNode payload, long version, String type) {
         UUID accountId = UUID.fromString(payload.get("accountId").asText());
-        UUID transactionId = UUID.fromString(payload.get("transactionId").asText());
         BigDecimal amount = new BigDecimal(payload.get("amount").asText());
-        String currency = payload.get("currency").asText();
-        long version = payload.has("version") ? payload.get("version").asLong() : 0L;
-
-        TransactionProjection tx = new TransactionProjection(
-            transactionId, accountId, "DEBIT", amount, currency, "COMPLETED",
-            payload.has("reference") ? payload.get("reference").asText() : null,
-            payload.has("idempotencyKey") ? payload.get("idempotencyKey").asText() : null,
-            payload.has("fraudScore") ? payload.get("fraudScore").decimalValue() : null
-        );
-
-        return transactionRepo.save(tx)
-            .then(accountRepo.updateBalance(accountId, amount.negate(), version))
-            .then(cacheService.evict(accountId))
-            .then();
+        BigDecimal delta = "DEBIT".equals(type) ? amount.negate() : amount;
+        return transactionRepo.insertIfAbsent(
+                UUID.fromString(payload.get("transactionId").asText()), accountId, type, amount,
+                payload.get("currency").asText(), text(payload, "reference"), text(payload, "idempotencyKey"),
+                payload.has("fraudScore") ? payload.get("fraudScore").decimalValue() : null)
+            .then(accountRepo.applyDelta(accountId, delta, version))
+            .then(cacheService.evict(accountId));
     }
 
-    private Mono<Void> projectAccountCredited(JsonNode payload) {
-        UUID accountId = UUID.fromString(payload.get("accountId").asText());
-        UUID transactionId = UUID.fromString(payload.get("transactionId").asText());
-        BigDecimal amount = new BigDecimal(payload.get("amount").asText());
-        String currency = payload.get("currency").asText();
-        long version = payload.has("version") ? payload.get("version").asLong() : 0L;
-
-        TransactionProjection tx = new TransactionProjection(
-            transactionId, accountId, "CREDIT", amount, currency, "COMPLETED",
-            payload.has("reference") ? payload.get("reference").asText() : null,
-            payload.has("idempotencyKey") ? payload.get("idempotencyKey").asText() : null,
-            null
-        );
-
-        return transactionRepo.save(tx)
-            .then(accountRepo.updateBalance(accountId, amount, version))
-            .then(cacheService.evict(accountId))
-            .then();
+    private static String text(JsonNode node, String field) {
+        return node.hasNonNull(field) ? node.get(field).asText() : null;
     }
 }
