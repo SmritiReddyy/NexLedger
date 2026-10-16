@@ -1,6 +1,8 @@
 package com.nexledger.ledger.api.controller;
 
 import com.nexledger.ledger.command.handler.*;
+import com.nexledger.ledger.concurrency.LockTimeoutException;
+import com.nexledger.ledger.event.store.DuplicateEventException;
 import com.nexledger.ledger.event.store.OptimisticConcurrencyException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -46,6 +48,20 @@ public class GlobalExceptionHandler {
     public Mono<ProblemDetail> handleConcurrency(OptimisticConcurrencyException e) {
         ProblemDetail pd = ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, e.getMessage());
         pd.setTitle("Concurrency Conflict");
+        return Mono.just(pd);
+    }
+
+    @ExceptionHandler(DuplicateEventException.class)
+    public Mono<ProblemDetail> handleDuplicateEvent(DuplicateEventException e) {
+        ProblemDetail pd = ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, e.getMessage());
+        pd.setTitle("Duplicate Request");
+        return Mono.just(pd);
+    }
+
+    @ExceptionHandler(LockTimeoutException.class)
+    public Mono<ProblemDetail> handleLockTimeout(LockTimeoutException e) {
+        ProblemDetail pd = ProblemDetail.forStatusAndDetail(HttpStatus.SERVICE_UNAVAILABLE, e.getMessage());
+        pd.setTitle("Account Busy");
         return Mono.just(pd);
     }
 

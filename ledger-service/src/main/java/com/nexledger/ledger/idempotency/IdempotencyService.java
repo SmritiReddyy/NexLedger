@@ -1,5 +1,6 @@
 package com.nexledger.ledger.idempotency;
 
+import com.nexledger.ledger.command.handler.DuplicateRequestException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -8,55 +9,66 @@ import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
 
 import java.time.Duration;
+import java.util.UUID;
+import java.util.function.Supplier;
 
+/**
+ * Exactly-once command handling keyed by the client's Idempotency-Key.
+ *
+ * A completed command's result is cached, so a retry returns the original
+ * transaction id instead of an error or a second debit. While a command is in
+ * flight, a short-lived PROCESSING marker rejects concurrent duplicates. The
+ * marker's short TTL means a crash mid-command does not block the key for a
+ * day; the event store's unique idempotency index stops the retry from
+ * writing twice even if the marker or the cached result is lost.
+ */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class IdempotencyService {
 
-    private static final String KEY_PREFIX = "idempotency:";
-    private static final String LOCK_PREFIX = "lock:";
+    private static final String RESULT_PREFIX = "idempotency:";
+    private static final String PROCESSING_PREFIX = "lock:idempotency:";
     private static final String PROCESSING = "PROCESSING";
 
     private final ReactiveRedisTemplate<String, String> redisTemplate;
 
     @Value("${nexledger.idempotency.ttl-seconds:86400}")
-    private long ttlSeconds;
+    private long resultTtlSeconds;
 
-    /**
-     * Attempts to acquire an idempotency lock via Redis SETNX.
-     * Returns true if the lock was acquired (first request), false if duplicate.
-     */
-    public Mono<Boolean> acquireLock(String idempotencyKey) {
-        String redisKey = LOCK_PREFIX + KEY_PREFIX + idempotencyKey;
-        return redisTemplate.opsForValue()
-            .setIfAbsent(redisKey, PROCESSING, Duration.ofSeconds(ttlSeconds))
-            .doOnNext(acquired -> {
-                if (acquired) {
-                    log.debug("Idempotency lock acquired for key: {}", idempotencyKey);
-                } else {
-                    log.warn("Duplicate request detected for idempotency key: {}", idempotencyKey);
+    @Value("${nexledger.idempotency.processing-ttl-seconds:30}")
+    private long processingTtlSeconds;
+
+    public Mono<UUID> execute(String idempotencyKey, Supplier<Mono<UUID>> command) {
+        return getResult(idempotencyKey)
+            .map(UUID::fromString)
+            .doOnNext(id -> log.debug("Replaying stored result for idempotency key {}", idempotencyKey))
+            .switchIfEmpty(Mono.defer(() -> markProcessing(idempotencyKey).flatMap(acquired -> {
+                if (!acquired) {
+                    return Mono.error(new DuplicateRequestException(
+                        "A request with idempotency key " + idempotencyKey + " is already in progress"));
                 }
-            });
+                return command.get()
+                    .flatMap(result -> storeResult(idempotencyKey, result.toString()).thenReturn(result))
+                    .doFinally(signal -> clearProcessing(idempotencyKey).subscribe());
+            })));
     }
 
-    /**
-     * Stores the result of a successful operation so subsequent duplicate
-     * requests can return the same response without reprocessing.
-     */
-    public Mono<Boolean> storeResult(String idempotencyKey, String result) {
-        String redisKey = KEY_PREFIX + idempotencyKey;
+    Mono<Boolean> markProcessing(String idempotencyKey) {
         return redisTemplate.opsForValue()
-            .set(redisKey, result, Duration.ofSeconds(ttlSeconds));
+            .setIfAbsent(PROCESSING_PREFIX + idempotencyKey, PROCESSING, Duration.ofSeconds(processingTtlSeconds));
+    }
+
+    public Mono<Boolean> storeResult(String idempotencyKey, String result) {
+        return redisTemplate.opsForValue()
+            .set(RESULT_PREFIX + idempotencyKey, result, Duration.ofSeconds(resultTtlSeconds));
     }
 
     public Mono<String> getResult(String idempotencyKey) {
-        String redisKey = KEY_PREFIX + idempotencyKey;
-        return redisTemplate.opsForValue().get(redisKey);
+        return redisTemplate.opsForValue().get(RESULT_PREFIX + idempotencyKey);
     }
 
-    public Mono<Boolean> releaseLock(String idempotencyKey) {
-        String lockKey = LOCK_PREFIX + KEY_PREFIX + idempotencyKey;
-        return redisTemplate.delete(lockKey).map(count -> count > 0);
+    Mono<Boolean> clearProcessing(String idempotencyKey) {
+        return redisTemplate.delete(PROCESSING_PREFIX + idempotencyKey).map(count -> count > 0);
     }
 }

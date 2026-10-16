@@ -4,6 +4,9 @@ import com.nexledger.ledger.api.dto.CreateAccountRequest;
 import com.nexledger.ledger.api.dto.DebitRequest;
 import com.nexledger.ledger.api.dto.CreditRequest;
 import com.nexledger.ledger.command.handler.AccountCommandHandler;
+import com.nexledger.ledger.command.handler.AccountNotFoundException;
+import com.nexledger.ledger.command.handler.AccountStateLoader;
+import com.nexledger.ledger.domain.AccountState;
 import com.nexledger.ledger.command.model.CreateAccountCommand;
 import com.nexledger.ledger.command.model.CreditAccountCommand;
 import com.nexledger.ledger.command.model.DebitAccountCommand;
@@ -18,6 +21,8 @@ import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.Map;
 import java.util.UUID;
 
@@ -27,6 +32,7 @@ import java.util.UUID;
 public class AccountController {
 
     private final AccountCommandHandler commandHandler;
+    private final AccountStateLoader stateLoader;
     private final AccountCacheService cacheService;
     private final AccountProjectionRepository accountRepo;
 
@@ -44,6 +50,28 @@ public class AccountController {
         return cacheService.get(accountId)
             .map(ResponseEntity::ok)
             .defaultIfEmpty(ResponseEntity.notFound().build());
+    }
+
+    record BalanceView(UUID accountId, BigDecimal balance, String currency, long version,
+                       int eventsApplied, Instant lastEventAt, Instant asOf) {}
+
+    /**
+     * Balance rebuilt from the event store, either now or at a past instant
+     * (asOf, ISO-8601) or version. This reads the write side's source of truth,
+     * not the cached projection, so it is the figure to use for audit.
+     */
+    @GetMapping("/{accountId}/balance")
+    public Mono<BalanceView> balance(@PathVariable UUID accountId,
+                                     @RequestParam(required = false) Instant asOf,
+                                     @RequestParam(required = false) Long version) {
+        Mono<AccountState> state = version != null ? stateLoader.atVersion(accountId, version)
+            : asOf != null ? stateLoader.asOf(accountId, asOf)
+            : stateLoader.current(accountId);
+        return state
+            .filter(AccountState::exists)
+            .switchIfEmpty(Mono.error(new AccountNotFoundException(accountId)))
+            .map(s -> new BalanceView(accountId, s.balance(), s.currency(), s.version(),
+                s.eventsApplied(), s.lastEventAt(), asOf));
     }
 
     @GetMapping("/owner/{ownerId}")
