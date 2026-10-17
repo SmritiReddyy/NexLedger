@@ -17,8 +17,15 @@ n_fraud = int(N * FRAUD_RATE)
 n_legit = N - n_fraud
 
 
+def derive_amount_features(df):
+    """Compute amount-derived features exactly as app/ml_scorer.py does at serving time."""
+    df["amount_norm"] = df["amount"] / 10000.0
+    df["round_amount"] = ((df["amount"] >= 1000) & (df["amount"] % 100 == 0)).astype(float)
+    return df
+
+
 def generate_legit(n):
-    return pd.DataFrame({
+    df = pd.DataFrame({
         "amount": np.random.lognormal(mean=5.5, sigma=1.2, size=n),
         "amount_norm": np.zeros(n),
         "is_debit": np.random.binomial(1, 0.7, n).astype(float),
@@ -30,14 +37,16 @@ def generate_legit(n):
         "round_amount": np.zeros(n),
         "label": np.zeros(n, dtype=int),
     })
+    return derive_amount_features(df)
 
 
 def generate_fraud(n):
     df = pd.DataFrame({
-        "amount": np.random.choice([
+        # half just under/over a reporting threshold, half suspiciously round amounts
+        "amount": np.random.permutation(np.concatenate([
             np.random.uniform(9500, 12000, n // 2),
-            np.random.choice([500, 1000, 2000, 5000, 10000], n - n // 2),
-        ]).flatten()[:n],
+            np.random.choice([500.0, 1000.0, 2000.0, 5000.0, 10000.0], n - n // 2),
+        ])),
         "amount_norm": np.ones(n),
         "is_debit": np.ones(n),
         "velocity_count_1h": np.random.poisson(8, n).astype(float),
@@ -48,8 +57,7 @@ def generate_fraud(n):
         "round_amount": np.ones(n),
         "label": np.ones(n, dtype=int),
     })
-    df["amount_norm"] = df["amount"] / 10000.0
-    return df
+    return derive_amount_features(df)
 
 
 df = pd.concat([generate_legit(n_legit), generate_fraud(n_fraud)], ignore_index=True)
