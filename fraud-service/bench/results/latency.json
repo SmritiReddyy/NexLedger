@@ -1,0 +1,31 @@
+{
+  "service": "http://localhost:18090",
+  "results": [
+    {
+      "requests": 5000,
+      "concurrency": 1,
+      "p50_ms": 3.5,
+      "p95_ms": 6.21,
+      "p99_ms": 10.69,
+      "max_ms": 64.57,
+      "throughput_rps": 270,
+      "decisions": {
+        "ALLOW": 3976,
+        "BLOCK": 1024
+      }
+    },
+    {
+      "requests": 5000,
+      "concurrency": 8,
+      "p50_ms": 4.84,
+      "p95_ms": 16.48,
+      "p99_ms": 27.81,
+      "max_ms": 55.54,
+      "throughput_rps": 1166,
+      "decisions": {
+        "BLOCK": 4690,
+        "ALLOW": 310
+      }
+    }
+  ]
+}
