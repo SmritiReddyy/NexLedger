@@ -35,10 +35,24 @@ class WarmupSimulation extends Simulation {
         .check(status.is(201))
         .check(jsonPath("$.accountId").saveAs("accountId"))
     )
+    .exec { session =>
+      session("accountId").asOption[String].foreach(id => out.synchronized(out.println(id)))
+      session
+    }
+
+  // LedgerSimulation reads these from the classpath (src/test/resources/account_ids.csv)
+  val csvFile = new File("src/test/resources/account_ids.csv")
+  csvFile.getParentFile.mkdirs()
+  val out = new PrintWriter(csvFile)
+  out.println("accountId")
+
+  after {
+    out.close()
+  }
 
   setUp(
     createAccounts.inject(
-      atOnceUsers(500)
+      rampUsers(500).during(10.seconds)
     )
   ).protocols(httpProtocol)
 }

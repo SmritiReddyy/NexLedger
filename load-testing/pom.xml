@@ -16,6 +16,8 @@
         <scala.version>2.13.13</scala.version>
         <gatling.version>3.10.5</gatling.version>
         <gatling-maven-plugin.version>4.9.6</gatling-maven-plugin.version>
+        <!-- override with -Dgatling.simulationClass=com.nexledger.WarmupSimulation -->
+        <gatling.simulationClass>com.nexledger.LedgerSimulation</gatling.simulationClass>
     </properties>
 
     <dependencies>
@@ -35,7 +37,7 @@
                 <artifactId>gatling-maven-plugin</artifactId>
                 <version>${gatling-maven-plugin.version}</version>
                 <configuration>
-                    <simulationClass>com.nexledger.LedgerSimulation</simulationClass>
+                    <simulationClass>${gatling.simulationClass}</simulationClass>
                 </configuration>
             </plugin>
             <plugin>
