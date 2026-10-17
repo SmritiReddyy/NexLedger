@@ -16,10 +16,20 @@ curl -X POST /accounts \
   -d '{"ownerId":"alice","currency":"USD","initialBalance":10000.00}'
 ```
 
-**Get account**
+**Get account** (read projection, eventually consistent)
 ```bash
 curl /accounts/{accountId}
 ```
+
+**Balance, rebuilt from the event store** (now, at an instant, or at a version)
+```bash
+curl /accounts/{accountId}/balance
+curl "/accounts/{accountId}/balance?asOf=2026-10-15T18:00:00Z"
+curl "/accounts/{accountId}/balance?version=12"
+# {"accountId":"...","balance":742.50,"currency":"USD","version":12,"eventsApplied":13,"lastEventAt":"...","asOf":null}
+```
+
+Retrying a debit or credit with the same `Idempotency-Key` returns the original `transactionId`. Nothing is applied twice.
 
 **Debit**
 ```bash
@@ -41,7 +51,7 @@ curl -X POST /accounts/{accountId}/credit \
 
 ### Transfers
 
-Transfers are executed as a saga — debit + credit in sequence, with automatic rollback if either step fails.
+Transfers run as a persisted saga: debit, then credit. If the credit cannot succeed, the source is refunded. If the process dies mid-way, the recovery worker finishes the transfer. The response carries the saga state (`COMPLETED`, or `DEBITED` / `STARTED` if it paused on an infrastructure error and will be resumed). Reusing the `Idempotency-Key` returns the same saga.
 
 ```bash
 curl -X POST /transfers \
@@ -53,6 +63,11 @@ curl -X POST /transfers \
     "amount": 1000.00,
     "currency": "USD"
   }'
+```
+
+**Transfer status**
+```bash
+curl /transfers/{sagaId}
 ```
 
 ---
@@ -77,7 +92,8 @@ All errors follow [RFC 7807](https://datatracker.ietf.org/doc/html/rfc7807):
 
 | Status | Condition |
 |--------|-----------|
-| `409 Conflict` | Duplicate idempotency key |
+| `409 Conflict` | Same idempotency key while the first request is still in flight |
+| `503 Service Unavailable` | Account lock not acquired within 3 s (heavy contention); safe to retry |
 | `403 Forbidden` | Transaction blocked by fraud detection |
 | `422 Unprocessable Entity` | Insufficient funds |
 | `404 Not Found` | Account does not exist |
