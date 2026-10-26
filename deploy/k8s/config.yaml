@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nexledger-config
+data:
+  DB_HOST: postgres
+  DB_PORT: "5432"
+  DB_NAME: nexledger
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"
+  KAFKA_BROKERS: kafka:9092
+  FRAUD_SERVICE_URL: http://fraud-service:8090
+  SERVER_PORT: "8080"
+  JAVA_OPTS: "-Xms256m -Xmx512m -XX:+UseG1GC"
+  # Spring Boot enables these on its own when it detects Kubernetes; explicit so the
+  # probes in ledger-service.yaml never 404.
+  MANAGEMENT_ENDPOINT_HEALTH_PROBES_ENABLED: "true"
+---
+# Local-cluster credentials only. In a real environment this Secret comes from a secret manager.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: nexledger-db
+type: Opaque
+stringData:
+  DB_USER: nexledger
+  DB_PASS: nexledger

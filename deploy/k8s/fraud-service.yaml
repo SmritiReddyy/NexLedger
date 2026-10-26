@@ -1,0 +1,38 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fraud-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: fraud-service}
+  template:
+    metadata:
+      labels: {app: fraud-service}
+    spec:
+      containers:
+        - name: fraud-service
+          image: nexledger/fraud-service:local
+          imagePullPolicy: IfNotPresent
+          command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8090", "--workers", "2"]
+          ports: [{containerPort: 8090}]
+          env:
+            - {name: REDIS_URL, value: "redis://redis:6379"}
+            - {name: MODEL_PATH, value: /app/models/fraud_model.json}
+          readinessProbe:
+            httpGet: {path: /health, port: 8090}
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /health, port: 8090}
+            periodSeconds: 15
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {memory: 512Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fraud-service
+spec:
+  selector: {app: fraud-service}
+  ports: [{port: 8090}]
