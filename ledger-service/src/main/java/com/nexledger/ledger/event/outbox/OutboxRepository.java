@@ -17,6 +17,14 @@ public interface OutboxRepository extends ReactiveCrudRepository<OutboxEvent, Lo
     @Query("SELECT * FROM outbox_events WHERE status = 'PENDING' ORDER BY id LIMIT :limit FOR UPDATE SKIP LOCKED")
     Flux<OutboxEvent> claimPending(int limit);
 
+    /**
+     * Transaction-scoped advisory lock that makes one relay, across all replicas,
+     * the publisher at a time. Released when the transaction ends, including when
+     * the replica holding it dies.
+     */
+    @Query("SELECT pg_try_advisory_xact_lock(:key)")
+    Mono<Boolean> tryRelayLock(long key);
+
     @Modifying
     @Query("UPDATE outbox_events SET status = 'PUBLISHED', published_at = NOW() WHERE id IN (:ids)")
     Mono<Integer> markPublished(Collection<Long> ids);

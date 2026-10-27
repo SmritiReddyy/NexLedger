@@ -1,11 +1,15 @@
 package com.nexledger.ledger;
 
+import com.nexledger.ledger.event.outbox.OutboxRelay;
 import com.nexledger.ledger.event.outbox.OutboxRepository;
+import com.nexledger.ledger.event.publisher.EventPublisher;
 import com.nexledger.ledger.event.store.EventRepository;
 import com.nexledger.ledger.query.projection.AccountProjectionRepository;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
+import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.transaction.reactive.TransactionalOperator;
 import reactor.core.publisher.Flux;
 import reactor.core.scheduler.Schedulers;
 
@@ -18,6 +22,7 @@ import java.util.Map;
 import java.util.Random;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
@@ -28,6 +33,9 @@ class LedgerIntegrationTest extends IntegrationTestBase {
     @Autowired EventRepository events;
     @Autowired OutboxRepository outbox;
     @Autowired AccountProjectionRepository projections;
+    @Autowired OutboxRelay relay;
+    @Autowired EventPublisher publisher;
+    @Autowired TransactionalOperator transactionalOperator;
 
     @Test
     void pointInTimeReplayMatchesTheBalanceAtEveryCheckpoint() throws Exception {
@@ -119,5 +127,52 @@ class LedgerIntegrationTest extends IntegrationTestBase {
             .untilAsserted(() -> assertThat(outbox.countPending().block()).isZero());
         await().atMost(SETTLE).untilAsserted(() ->
             assertThat(projections.findById(account).block().getBalance()).isEqualByComparingTo("55.00"));
+    }
+
+    /**
+     * Two service replicas each run an outbox relay. If both publish at once,
+     * version N+1 of an account can reach Kafka before version N, and the
+     * projection (which ignores versions older than the one it holds) silently
+     * drops N. The relays must hand off, not race.
+     */
+    @Test
+    void twoRelayInstancesKeepEachAccountsEventsInOrder() throws Exception {
+        OutboxRelay second = new OutboxRelay(outbox, publisher, transactionalOperator);   // the other replica's
+        ReflectionTestUtils.setField(second, "batchSize", 3);
+        Object ownBatch = ReflectionTestUtils.getField(relay, "batchSize");
+        ReflectionTestUtils.setField(relay, "batchSize", 3);   // small batches make the two interleave
+        // Hold the scheduled relay so a backlog builds, as it does under real load.
+        AtomicBoolean scheduledBusy = (AtomicBoolean) ReflectionTestUtils.getField(relay, "running");
+        await().atMost(SETTLE).until(() -> scheduledBusy.compareAndSet(false, true));
+        UUID account = createAccount("0.00");
+        int applied = 0;
+        try {
+            for (int i = 0; i < 300; i++) {
+                if (credit(account, "1.00", "order-" + account + "-" + i).returnResult(Void.class).getStatus().value() == 200) {
+                    applied++;
+                }
+            }
+            // Release the backlog to both relays at once.
+            AtomicBoolean stop = new AtomicBoolean();
+            List<Thread> relays = new ArrayList<>();
+            for (OutboxRelay r : List.of(relay, second)) {
+                Thread t = new Thread(() -> {
+                    while (!stop.get()) r.relayBatch().block(Duration.ofSeconds(10));
+                });
+                t.start();
+                relays.add(t);
+            }
+            await().atMost(SETTLE).untilAsserted(() -> assertThat(outbox.countPending().block()).isZero());
+            stop.set(true);
+            for (Thread t : relays) t.join();
+        } finally {
+            ReflectionTestUtils.setField(relay, "batchSize", ownBatch);
+            scheduledBusy.set(false);
+        }
+        BigDecimal expected = new BigDecimal(applied);
+        assertThat(applied).isEqualTo(300);
+        assertThat(replayedBalance(account, "")).isEqualByComparingTo(expected);
+        await().atMost(SETTLE).untilAsserted(() ->
+            assertThat(projections.findById(account).block().getBalance()).isEqualByComparingTo(expected));
     }
 }

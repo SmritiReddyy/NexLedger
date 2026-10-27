@@ -20,6 +20,13 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * and marked PUBLISHED only after Kafka acknowledges them. A crash between the
  * send and the mark republishes the batch on the next run: delivery is
  * at-least-once, and the projections ignore an event version they already applied.
+ *
+ * Only one relay publishes at a time, across all replicas: each run first takes
+ * a transaction-scoped advisory lock and does nothing if another replica holds
+ * it. SKIP LOCKED alone stops two relays publishing the same row, but not two
+ * relays publishing an account's consecutive events concurrently. Then version
+ * N+1 can reach Kafka before N, and the projection, which skips versions older
+ * than the one it holds, drops N for good.
  */
 @Slf4j
 @Component
@@ -53,13 +60,17 @@ public class OutboxRelay {
     }
 
     public Mono<Integer> relayBatch() {
-        Mono<Integer> batch = outboxRepository.claimPending(batchSize)
-            .concatMap(row -> eventPublisher.send(row.topic(), row.aggregateId(), row.payload().asString())
-                .thenReturn(row.id()))
-            .collectList()
-            .flatMap((List<Long> ids) -> ids.isEmpty()
-                ? Mono.just(0)
-                : outboxRepository.markPublished(ids).thenReturn(ids.size()));
+        Mono<Integer> batch = outboxRepository.tryRelayLock(RELAY_LOCK_KEY)
+            .flatMap(acquired -> !acquired ? Mono.just(0) : outboxRepository.claimPending(batchSize)
+                .concatMap(row -> eventPublisher.send(row.topic(), row.aggregateId(), row.payload().asString())
+                    .thenReturn(row.id()))
+                .collectList()
+                .flatMap((List<Long> ids) -> ids.isEmpty()
+                    ? Mono.just(0)
+                    : outboxRepository.markPublished(ids).thenReturn(ids.size())));
         return transactionalOperator.transactional(batch);
     }
+
+    /** Arbitrary, but fixed: every replica must use the same key. */
+    static final long RELAY_LOCK_KEY = 0x4E58_4C45_4447_4552L;   // "NXLEDGER"
 }
