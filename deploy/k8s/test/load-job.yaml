@@ -1,0 +1,32 @@
+# In-cluster load test. Uses the fraud-service image only because it already has
+# Python; the script needs nothing beyond the standard library.
+#
+#   kubectl -n nexledger create configmap rolling-load --from-file=deploy/k8s/test/rolling_load.py
+#   kubectl -n nexledger apply -f deploy/k8s/test/load-job.yaml
+#   kubectl -n nexledger logs -f job/rolling-load | grep RESULT
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: rolling-load
+  namespace: nexledger
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: load
+          image: nexledger/fraud-service:local
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-u", "/scripts/rolling_load.py"]
+          env:
+            - {name: SECONDS, value: "90"}
+            - {name: WORKERS, value: "8"}
+            - {name: ACCOUNTS, value: "200"}
+          volumeMounts:
+            - {name: scripts, mountPath: /scripts}
+          resources:
+            requests: {cpu: 100m, memory: 64Mi}
+      volumes:
+        - name: scripts
+          configMap: {name: rolling-load}
