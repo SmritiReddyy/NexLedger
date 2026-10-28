@@ -1,0 +1,1 @@
+{"requests": 22285, "ok": 13255, "blocked_by_fraud": 9030, "insufficient": 0, "other_4xx": 0, "first_attempt_failures": 0, "failures_by_kind": {}, "unresolved": 0, "retries": 0, "seconds": 90.0, "workers": 8, "accounts": 200, "requests_per_sec": 247.5, "latency_ms": {"p50": 24.2, "p99": 133.1}, "failures_per_second": {}, "replay_mismatches": 0, "projection_mismatches": 0}

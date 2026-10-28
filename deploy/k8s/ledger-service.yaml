@@ -1,5 +1,6 @@
-# Two replicas on purpose: per-account Redis locks, the event store's version check and the
-# outbox relay's FOR UPDATE SKIP LOCKED are what keep two instances from double-writing.
+# Two replicas on purpose: per-account Redis locks and the event store's version check keep
+# two instances from double-writing, and the outbox relay's advisory lock keeps them from
+# publishing an account's events out of order (see README: two bugs only two replicas showed).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -8,6 +9,10 @@ spec:
   replicas: 2
   selector:
     matchLabels: {app: ledger-service}
+  # Start the new pod before stopping an old one, so capacity never drops.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxSurge: 1, maxUnavailable: 0}
   template:
     metadata:
       labels: {app: ledger-service}
@@ -23,10 +28,18 @@ spec:
               for dep in postgres:5432 redis:6379 kafka:9092; do
                 until nc -z -w 2 "${dep%%:*}" "${dep##*:}"; do echo "waiting for $dep"; sleep 2; done
               done
+      # preStop (10 s) + Spring's graceful shutdown (up to 20 s) must fit inside this.
+      terminationGracePeriodSeconds: 40
       containers:
         - name: ledger-service
           image: nexledger/ledger-service:local
           imagePullPolicy: IfNotPresent
+          # Endpoint removal is asynchronous: for a moment after a pod starts
+          # terminating, the Service still routes new connections to it. Keep
+          # serving through that window, then shut down gracefully.
+          lifecycle:
+            preStop:
+              exec: {command: ["sleep", "10"]}
           ports: [{containerPort: 8080}]
           envFrom:
             - configMapRef: {name: nexledger-config}

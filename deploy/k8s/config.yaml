@@ -15,6 +15,9 @@ data:
   # Spring Boot enables these on its own when it detects Kubernetes; explicit so the
   # probes in ledger-service.yaml never 404.
   MANAGEMENT_ENDPOINT_HEALTH_PROBES_ENABLED: "true"
+  # Finish in-flight requests on SIGTERM instead of dropping them.
+  SERVER_SHUTDOWN: graceful
+  SPRING_LIFECYCLE_TIMEOUT_PER_SHUTDOWN_PHASE: 20s
 ---
 # Local-cluster credentials only. In a real environment this Secret comes from a secret manager.
 apiVersion: v1
