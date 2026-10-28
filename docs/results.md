@@ -13,7 +13,7 @@ The load generator ran on the same laptop, so treat these as single-box numbers,
 
 ### Integration tests
 
-13 tests, run with `mvn test` against real Postgres, Redis and Kafka via Testcontainers:
+14 tests, run with `mvn test` against real Postgres, Redis and Kafka via Testcontainers:
 
 | Property | Test | Result |
 |---|---|---|
@@ -22,6 +22,7 @@ The load generator ran on the same laptop, so treat these as single-box numbers,
 | A retried request returns the original transaction | `retriedRequestReturnsTheOriginalTransaction` | same transaction id, one debit |
 | Concurrent duplicates write once | `concurrentDuplicatesWriteExactlyOneEvent` (10 parallel copies) | exactly 1 event |
 | Every event reaches the read model | `everyEventReachesKafkaThroughTheOutbox` | outbox drains, projection matches |
+| Two replicas' relays cannot reorder an account's events | `twoRelayInstancesKeepEachAccountsEventsInOrder` (300 credits, two relays draining a backlog) | projection 300.00, equal to the event store (232.00 before the advisory-lock fix) |
 | A crash between debit and credit is finished, not lost or doubled | `crashAfterTheDebitIsFinishedByRecovery` | saga pauses at DEBITED, recovery completes it, total money conserved |
 | A credit to a missing account is refunded | `creditToMissingAccountIsCompensated` | COMPENSATED, source restored |
 | Insufficient funds never reaches compensation | `insufficientFundsFailsWithoutTouchingEitherAccount` | FAILED, neither account touched |
@@ -78,3 +79,14 @@ The next steps would be:
 The fraud check sits on the debit path by design: a debit waits for a score, so a fraudulent one is blocked before its event is written. The ledger gives it 500 ms and fails open if the service is down.
 
 The XGBoost model trains at image build time on 50,000 synthetic transactions. Its 1.00 test AUC only shows the synthetic classes are easy to separate. It is not a claim about real-world fraud detection.
+
+## Kubernetes
+
+Two ledger replicas on a kind cluster, in-cluster load through the Service.
+Full method and the two bugs it found: [deploy/k8s/README.md](../deploy/k8s/README.md).
+
+| | Failed on first attempt | Event store vs expected |
+|---|---|---|
+| Rolling restart, before preStop + graceful shutdown | 4, 3, 9 (3 runs) | exact |
+| Rolling restart, after | **0, 0, 0** (3 runs, 69,642 requests) | exact |
+| JVM `SIGKILL` of one replica at ~650 req/s | 15, 20, all resolved exactly once on retry | exact |

@@ -29,6 +29,7 @@ Command ──► per-account Redis lock ──► fold account from its events 
 **Transactional outbox.**
 - An event and its Kafka message are written in the same Postgres transaction.
 - A relay publishes outbox rows using `FOR UPDATE SKIP LOCKED`. Delivery is at-least-once.
+- Only one relay publishes at a time across replicas (a Postgres advisory lock), so each account's events reach Kafka in version order.
 - Projections apply each event version once, so redelivery and replays are harmless.
 
 **Crash-safe transfers.**
@@ -48,11 +49,12 @@ Full method and conditions: [docs/results.md](docs/results.md). Single M3 laptop
 
 | | |
 |---|---|
-| Integration tests (real Postgres, Redis, Kafka via Testcontainers) | **13/13 passing**: replay at 6 checkpoints, 50-way concurrent debits (exactly 33 succeed, balance 10.00), duplicate requests, outbox delivery, crash between debit and credit recovered |
+| Integration tests (real Postgres, Redis, Kafka via Testcontainers) | **14/14 passing**: replay at 6 checkpoints, 50-way concurrent debits (exactly 33 succeed, balance 10.00), duplicate requests, outbox delivery, two racing outbox relays keep events in order, crash between debit and credit recovered |
 | Sustained mixed load, strict checks | **537 req/s, 0 failures over 81,090 requests**, p95 32 ms. At 300 req/s: p95 11 ms. |
 | Consistency after all load runs | 4,521 accounts, 39,061 events: **0** projection/replay mismatches, **0** negative balances, **0** duplicate idempotency keys, outbox fully drained |
 | Fraud `/score` latency | **p50 3.5 ms, p95 6.2 ms** (1 client); p50 4.8 ms at 1,166 req/s |
 | Breaking point | ~900 req/s peak: lock polling saturates the shared Redis connection (see results) |
+| **Kubernetes**, 2 ledger replicas ([deploy/k8s](deploy/k8s/README.md)) | Rolling restarts under load: **0 failed requests** in 3 runs, after adding preStop and graceful shutdown (3–9 per restart before). JVM `SIGKILL` mid-load: the 15–20 requests in flight resolve exactly once on retry, and the event store matches every balance. |
 
 ---
 
@@ -68,7 +70,7 @@ Full method and conditions: [docs/results.md](docs/results.md). Single M3 laptop
 | Fraud sidecar | FastAPI + XGBoost |
 | Tests | JUnit 5, Testcontainers |
 | Load testing | Gatling |
-| Local infra | Docker Compose (one command) |
+| Local infra | Docker Compose (one command), or Kubernetes with Kustomize ([deploy/k8s](deploy/k8s/README.md)) |
 
 ---
 
@@ -100,3 +102,4 @@ curl http://localhost:8090/health
 - [Architecture](docs/architecture.md): CQRS, event sourcing, saga pattern, fraud scoring
 - [Load Testing](docs/load-testing.md): how to run Gatling
 - [Results](docs/results.md): what was measured and how
+- [Kubernetes](deploy/k8s/README.md): manifests, rollout and crash tests, and two bugs that only two replicas showed
