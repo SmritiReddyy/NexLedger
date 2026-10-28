@@ -45,6 +45,12 @@ spring:
       value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       auto-offset-reset: earliest
       enable-auto-commit: false
+      properties:
+        # A replica that dies holds its partitions until the coordinator gives up
+        # on it. With the 45 s default the read model fell ~10k events behind after
+        # a crash; 10 s hands the partitions to a live replica much sooner.
+        session.timeout.ms: 10000
+        heartbeat.interval.ms: 3000
 
 server:
   port: ${SERVER_PORT:8080}
